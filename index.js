@@ -1,19 +1,34 @@
-
-var parserx = require('parse-regexp')
+var parserx      = require('parse-regexp')
 var EventEmitter = require('events').EventEmitter
-var MuxDemux = require('mux-demux')
+var MuxDemux     = require('mux-demux')
+var remember     = require('remember')
+var idle         = require('idle')
+var timestamp    = require('monotonic-timestamp')
 
 module.exports = Rumours
 
+//THIS IS STRICTLY FOR DEBUGGING
+var ids = 'ABCDEFHIJKLMNOP'
+function createId () {
+  var id = ids[0]
+  ids = ids.substring(1)
+  return id
+}
+
 function Rumours (schema) {
   var emitter = new EventEmitter()
+  //DEBUG
+  emitter.id = createId() 
   var rules = []
   var live = {}
-
+  var locals = {}
   /* schema must be of form:
-  { '/regexp/f': function (key) {
+  { '/regexp/g': function (key) {
       //must return a scuttlebutt instance
-    } }
+      //regexes must match from the first character.
+      //[else madness would ensue]
+    }
+  }
   */
 
   for (var p in schema) {
@@ -24,83 +39,152 @@ function Rumours (schema) {
     for (i in rules) {
       var r = rules[i]
       var m = key.match(r.rx)
-      console.log(m, r, key)
       if(m && m.index === 0)
         return r.fn
     }
   }
 
-  //TRANSCEIVE
+  //OPEN is a much better verb than TRANSCIEVE
+  emitter.open = 
   emitter.transceive =
-  emitter.trx = function (key, cb) {
+  emitter.trx = function (key, local, cb) {
+    if(!cb && 'function' === typeof local)
+      cb = local, local = true
+    local = (local !== false) //default to true
+    if(local) locals[key] = true    
     if(live[key]) return live[key]
+
     var fn = match(key)
     if(!fn) throw new Error('no schema for:'+key)
     var doc = fn(key) //create instance.
     doc.key = key
     live[key] = doc //remeber what is open.
-    emitter.emit('trx', doc) //attach to any open streams.
-
+    emitter.emit('open', doc, local) //attach to any open streams.
+    emitter.emit('trx', doc, local)
+    doc.once('dispose', function () {
+      console.log('dispose', emitter.id, doc.key)
+      delete locals[doc.key]
+      delete live[doc.key]      
+    })
     if(cb) doc.once('sync', cb)
     return doc
   }
 
+  //CLOSE(doc)
+  emitter.close = 
   emitter.untransceive =
   emitter.untrx = function (doc) {
-    delete live[doc.key]
+    doc.dispose()
     emitter.emit('untrx', doc)
+    emitter.emit('close', doc)
     return this
   }
 
   /*
-    So, right now, I'm just replicating each live document.
-
-    When you connect, it's necessary to sync all documents.
-    use a Merkle Tree.
-
-    do this is parallel with the open documents 
-    (because that is much more important, we want that to work live)
-
-    only do disk IO when something changes.
-
-    that is a little bit more complicated than just reading 
-    and writing.
-
-    also, you may want to compact. 
-    maybe we want some smart compacting on the client, 
-    to optimize for localStorage.
-
-    next: TESTS?, persistence, efficient-replication?
-
-    this is basically integration, so don't go overboard with tests.
-    test the modules. just lite integration testing.
+    so the logic here:
+    if open a doc,
+      RTR over stream;
+      if idle
+        close stream
+      if change
+        reopen stream
   */
 
-  emitter.createStream = function (mode) {
-    var streams = {}
-    function onConnection (stream, local) {
-      //when a stream comes in, replicate it to the local 
-      var doc
-      try {
-        doc = emitter.trx(stream.meta)
-      } catch (err) {
-        return stream.error(stream)
-      }
-      //this works for in-memory stuff.
-      stream.pipe(doc.createStream()).pipe(stream)
-      //TODO: if document is not live,
-      //pause the incoming, until the document is synced.
-      //that will need a refactor of mux-demux to use duplex instead of through...
+  function activations (listen) {
+    emitter.on('open', onActive)
+    for(var key in live) {
+      (onActive)(live[key])
     }
-    var mx = MuxDemux(onConnection)
+
+    function onActive (doc, local) {
+      local = (local !== false)
+      var up = true
+      function onUpdate () {
+        if(up) return
+        up = true
+        listen(doc, true)
+      }
+      function onIdle () {
+        up = false
+        listen(doc, false)
+      }
+      idle(doc, 'update', 1e3, onIdle)
+      doc.once('dispose', function () {
+        if(up) {
+          up = false
+          listen(doc, false)
+        }
+        doc.removeListener('update', onIdle)
+        doc.removeListener('update', onUpdate)
+      })
+      doc.on('update', onUpdate)
+
+      listen(doc, true)
+    }
+  }
+
+  emitter.createStream = function (mode) {
+
+    var streams = {}
+    var mx = MuxDemux(function (stream) {
+      if(_stream = streams[stream.meta.key]) {
+        if(_stream.meta.ts > stream.meta.ts)
+          return _stream.end()
+        else
+          stream.end(), stream = _stream
+      }
+      streams[stream.meta.key] = stream
+      //this will trigger connectIf
+      emitter.open(stream.meta.key, false)
+    })
+    
+    function connectIf(doc) {
+        var stream = streams[doc.key]
+        console.log(emitter.id, 'connectIf')
+        if(!stream) {
+          streams[doc.key] = stream = 
+            mx.createStream({key: doc.key, ts: timestamp()})
+        }
+        console.log(emitter.id, 'createStream', stream.id)
+        stream.pipe(doc.createStream({wrapper:'raw', tail: true})).pipe(stream)
+        stream.once('close', function () {
+          delete streams[doc.key]
+        })
+    }
+
     //replicate all live documents.
     process.nextTick(function () {
-      for (var key in live) {
-        onConnection(mx.createStream(key), true)
-      }
+      activations(function (doc, up) {
+        console.log(emitter.id, 'ACTIVE', up, doc.key)
+        if(up) {
+          process.nextTick(function () {
+            connectIf(doc)
+          })
+        } else {
+          if(streams[doc.key])
+            streams[doc.key].end()
+          console.log(locals)
+          if(!locals[doc.key])
+            doc.dispose()
+        }
+      })
     })
+
     return mx
+  }
+
+  //inject kv object used to persist everything.
+  emitter.persist = function (kv) {
+    var sync = remember(kv)
+    function onActive (doc) {
+      sync(doc)
+    }
+    //check if any docs are already active.
+    //start persisting them.
+    for (var k in live) {
+      onActive(live[k])
+    }
+    emitter.on('trx', onActive)
   }
   return emitter
 }
-

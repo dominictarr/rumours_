@@ -8,7 +8,7 @@
   },
   "dependencies": {
     "scuttlebutt": "~4.0.2",
-    "mux-demux": "~3.3.3",
+    "mux-demux": "~3.3.4",
     "kv": "~1.0.2",
     "remember": "0.0.0",
     "idle": "0.0.0",

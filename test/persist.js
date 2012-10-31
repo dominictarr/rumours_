@@ -25,7 +25,7 @@ rmrf('/tmp/rumors-test', function () {
     r.persist(kv)
 
     var i = 0
-    var hi = r.trx('events/hello')
+    var hi = r.trx('events-hello')
     var timer = setInterval(function () {
       hi.emit('message', 'HELLO ' + new Date())
       if(++i < 5) return
@@ -40,10 +40,10 @@ rmrf('/tmp/rumors-test', function () {
 
   var r = createRumours()
 
-  var hi = r.open('events/hello')
+  var hi = r.open('events-hello')
   hi.on('dispose', mac(function () {
     var r = createRumours()
-    r.open('events/hello').on('message', mac(function (hi) {
+    r.open('events-hello').on('message', mac(function (hi) {
       console.log('message', hi)
     }).times(10))
   }).once())

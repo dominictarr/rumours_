@@ -244,6 +244,7 @@ function Rumours (schema) {
 
     //load the state - this is the hash of the documents!
     syncState(kv)
+    return emitter
   }
 
   return emitter

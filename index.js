@@ -4,11 +4,16 @@ var MuxDemux     = require('mux-demux')
 var remember     = require('remember')
 var idle         = require('idle')
 var timestamp    = require('monotonic-timestamp')
+var from         = require('from')
 
+var es           = require('event-stream')
+
+var sync         = require('./state-sync')
 module.exports = Rumours
 
 //THIS IS STRICTLY FOR DEBUGGING
 var ids = 'ABCDEFHIJKLMNOP'
+
 function createId () {
   var id = ids[0]
   ids = ids.substring(1)
@@ -22,7 +27,8 @@ function Rumours (schema) {
   var rules = []
   var live = {}
   var locals = {}
-  /* schema must be of form:
+
+  /* schema must be of form :
   { '/regexp/g': function (key) {
       //must return a scuttlebutt instance
       //regexes must match from the first character.
@@ -36,7 +42,7 @@ function Rumours (schema) {
   }
 
   function match (key) {
-    for (i in rules) {
+    for (var i in rules) {
       var r = rules[i]
       var m = key.match(r.rx)
       if(m && m.index === 0)
@@ -54,6 +60,13 @@ function Rumours (schema) {
     if(local) locals[key] = true    
     if(live[key]) return live[key]
 
+    //if we havn't emitted ready, emit it now,
+    //can deal with the rest of the updates later...
+    if(!emitter.ready) {
+      emitter.ready = true
+      emitter.emit('ready')
+    }
+
     var fn = match(key)
     if(!fn) throw new Error('no schema for:'+key)
     var doc = fn(key) //create instance.
@@ -62,7 +75,6 @@ function Rumours (schema) {
     emitter.emit('open', doc, local) //attach to any open streams.
     emitter.emit('trx', doc, local)
     doc.once('dispose', function () {
-      console.log('dispose', emitter.id, doc.key)
       delete locals[doc.key]
       delete live[doc.key]      
     })
@@ -99,7 +111,7 @@ function Rumours (schema) {
     function onActive (doc, local) {
       local = (local !== false)
       var up = true
-      function onUpdate () {
+      function onUpdate (u) {
         if(up) return
         up = true
         listen(doc, true)
@@ -108,25 +120,39 @@ function Rumours (schema) {
         up = false
         listen(doc, false)
       }
-      idle(doc, 'update', 1e3, onIdle)
+      //call onIdle when _update hasn't occured within ms...
+      idle(doc, '_update', 1e3, onIdle)
       doc.once('dispose', function () {
         if(up) {
           up = false
           listen(doc, false)
         }
-        doc.removeListener('update', onIdle)
-        doc.removeListener('update', onUpdate)
+        doc.removeListener('_update', onIdle)
+        doc.removeListener('_update', onUpdate)
       })
-      doc.on('update', onUpdate)
+      doc.on('_update', onUpdate)
 
       listen(doc, true)
     }
   }
 
-  emitter.createStream = function (mode) {
+  var state = {}
+  var syncState = sync(emitter, state)
 
+  //a better name for this?
+  function onReadyOrNow (cb) { 
+    process.nextTick(function () {
+      if(emitter.ready)  return cb()
+      emitter.once('ready', cb)
+    })
+  }
+
+  emitter.createStream = function (mode) {
     var streams = {}
     var mx = MuxDemux(function (stream) {
+      if(/^__state/.test(stream.meta.key)) {
+        return stateStream(stream)
+      }
       if(_stream = streams[stream.meta.key]) {
         if(_stream.meta.ts > stream.meta.ts)
           return _stream.end()
@@ -140,13 +166,12 @@ function Rumours (schema) {
     
     function connectIf(doc) {
         var stream = streams[doc.key]
-        console.log(emitter.id, 'connectIf')
         if(!stream) {
           streams[doc.key] = stream = 
             mx.createStream({key: doc.key, ts: timestamp()})
-        }
-        console.log(emitter.id, 'createStream', stream.id)
+        }        
         stream.pipe(doc.createStream({wrapper:'raw', tail: true})).pipe(stream)
+
         stream.once('close', function () {
           delete streams[doc.key]
         })
@@ -155,7 +180,6 @@ function Rumours (schema) {
     //replicate all live documents.
     process.nextTick(function () {
       activations(function (doc, up) {
-        console.log(emitter.id, 'ACTIVE', up, doc.key)
         if(up) {
           process.nextTick(function () {
             connectIf(doc)
@@ -163,11 +187,43 @@ function Rumours (schema) {
         } else {
           if(streams[doc.key])
             streams[doc.key].end()
-          console.log(locals)
+
           if(!locals[doc.key])
             doc.dispose()
         }
       })
+    })
+
+    function stateStream (stream) {
+      stream.on('data', function (ary) {
+        var key = ary.shift()
+        var hash = ary.shift()
+        if(state[key] !== hash && !live[key]) {
+          //(_, false) means close this again after it stops changing...
+          emitter.open(key, false)
+        }
+      })
+    }
+
+    //wait untill is ready, if not yet ready...
+    onReadyOrNow(function () {
+
+      from(
+        Object.keys(state).map(function (k) {
+          return [k, state[k]]
+        })
+      )
+      .pipe(mx.createStream({key: '__state'}))
+
+      /*.on('data', function (data) {
+        var key  = data.shift()
+        var hash = data.shift()
+        //just have to open the document,
+        //and it will be replicated to the remote.
+        if(state[key] !== hash)
+          emitter.open(key)
+      })*/
+
     })
 
     return mx
@@ -185,6 +241,10 @@ function Rumours (schema) {
       onActive(live[k])
     }
     emitter.on('trx', onActive)
+
+    //load the state - this is the hash of the documents!
+    syncState(kv)
   }
+
   return emitter
 }

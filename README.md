@@ -2,6 +2,8 @@
 
 <img src=https://secure.travis-ci.org/'Dominic Tarr'/rumours-db.png?branch=master>
 
+### this is stream-of-conciousness notes. not documentation yet, sorry.
+
 So, right now, I'm just replicating each live document.
 When you connect, it's necessary to sync all documents.
 

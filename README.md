@@ -70,9 +70,25 @@ so why would the dev want to think about it?
 
 ----------------------------------------------------------
 
-Next: either MERKLE trees, or IDLE.
+## Merkle Tree
 
-next is merkle trees, mass replication.
+okay, so the first thing here is to know the current image of the total data.
+so when an object comes into and out of memory, you need to remember it's state...
+
+then a summary (hash) of that state needs to be remembered...
+(so, a file of {key: hash} pairs?)
+then, when you connect, you start by exchanging each other's states,
+and then you replicate any document that is different.
+
+This doesn't need to be symmetrical, either side sends thier current hashes,
+the other responds by starting replications
+
+so, the first thing: a hash representing the current snapshot of a datastructure...
+
+We need to know that a doc has changed..., so, basically, we write an append only log.
+when, on startup, read this log, and then send that data...
+
+AHA! the cheapest thing would be a hash of the vector clock!
 
 ## License
 

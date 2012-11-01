@@ -7,7 +7,6 @@
     "url": "git://github.com/dominictarr/rumours.git"
   },
   "dependencies": {
-    "scuttlebutt": "~4.0.2",
     "mux-demux": "~3.3.4",
     "kv": "~1.0.2",
     "remember": "0.0.0",
@@ -16,7 +15,9 @@
     "sha1sum": "0.0.0",
     "from": "0.0.2"
   },
-  "devDependencies": {},
+  "devDependencies": {
+    "scuttlebutt": "~4.0.2"
+  },
   "scripts": {
     "test": "set -e; for t in test/*.js; do node $t; done"
   },

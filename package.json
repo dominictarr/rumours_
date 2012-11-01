@@ -12,7 +12,7 @@
     "remember": "0.0.0",
     "idle": "0.0.0",
     "monotonic-timestamp": "0.0.3",
-    "sha1sum": "0.0.0",
+    "sha1sum": "0.0.1",
     "from": "0.0.2"
   },
   "devDependencies": {

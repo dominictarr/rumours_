@@ -6,8 +6,6 @@ var idle         = require('idle')
 var timestamp    = require('monotonic-timestamp')
 var from         = require('from')
 
-var es           = require('event-stream')
-
 var sync         = require('./state-sync')
 module.exports = Rumours
 
